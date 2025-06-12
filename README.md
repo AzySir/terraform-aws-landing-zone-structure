@@ -16,11 +16,16 @@ networking/      # Network foundation and connectivity
 org/             # AWS Organizations management
 security/        # Security services and policies
 sharedservices/  # Common services across accounts
-workloads/       # Application workloads by region
+workloads/       # Application workloads by environment and region
     app/
-        ap-southeast-2/
-        eu-west-1/
-        eu-west-2/
+        dev/     # Development environment
+            ap-southeast-2/
+            eu-west-1/
+            eu-west-2/
+        prd/     # Production environment
+            ap-southeast-2/
+            eu-west-1/
+            eu-west-2/
 ```
 
 ## Domain Descriptions
@@ -83,15 +88,49 @@ workloads/       # Application workloads by region
 - Handles centralized service management
 
 ### Workloads Domain
-**Purpose**: Application workloads by region
-- **Regional Structure**: Segregated by geographic regions
+**Purpose**: Application workloads by environment and region
+- **Environment Structure**: Complete environment lifecycle management
+  - `dev/` - Development environment for testing and experimentation
+  - `prd/` - Production environment for live workloads
+- **Regional Structure**: Multi-region deployment within each environment
   - `ap-southeast-2/` - Asia Pacific (Sydney)
   - `eu-west-1/` - Europe (Ireland)  
   - `eu-west-2/` - Europe (London)
-- **Application Bootstrapping**: Sets up application infrastructure
-- **IAM Management**: Creates IAM users per application, per region
-- **Workload Isolation**: Each region can support different workload types
-- **Regional Compliance**: Handles region-specific requirements
+- **Regional Compliance Architecture**: Each region maintains separate configurations rather than using variables because different AWS regions have distinct compliance and regulatory requirements:
+  - **AWS GovCloud (US)** requires specific FedRAMP, ITAR, and government compliance configurations
+  - **AWS China regions** operate under different regulatory frameworks with specific data sovereignty requirements
+  - **Standard AWS regions** may have varying GDPR, data residency, or industry-specific compliance needs
+  - This approach allows for region-specific security baselines, encryption requirements, and audit configurations
+- **File Structure**: Each region contains standardized Terraform files
+  - `bootstrap.tf` - Initial account setup, cross-account roles, and region-specific IAM configurations
+  - `baseline.tf` - Standard security baselines, compliance policies, and regulatory controls specific to the region
+  - `common.auto.tfvars` - Shared variables across the region
+  - `variables.tf` - Variable definitions and validation
+
+#### Bootstrap.tf and Baseline.tf Module Functions
+
+**bootstrap.tf** serves as the foundational infrastructure layer for each workload region and would typically contain:
+
+- **Cross-Account IAM Roles**: Establishes `OrganizationAccountAccessRole` for secure cross-account access from the management account
+- **Regional IAM Users**: Creates region-specific IAM users for automation and deployment with minimal required permissions
+- **State Management**: Sets up S3 buckets for Terraform state storage with proper encryption and versioning
+- **KMS Keys**: Creates customer-managed KMS keys for encryption with region-appropriate key policies and cross-account access
+
+**baseline.tf** establishes the security and compliance foundation for each region and would typically contain:
+
+- **AWS Config Rules**: Deploys region-specific compliance rules (e.g., FedRAMP for GovCloud, GDPR for EU regions)
+- **Security Hub Standards**: Enables appropriate security standards based on regional compliance requirements
+- **GuardDuty Configuration**: Sets up threat detection with region-specific threat intelligence feeds
+- **CloudTrail Regional Settings**: Configures additional regional API logging requirements
+- **Backup Policies**: Implements region-specific backup retention and cross-region replication policies
+- **Resource Tagging Policies**: Enforces mandatory tags for cost allocation and compliance tracking
+- **Networking**: Provisions workload-specific VPC as a spoke in the hub-spoke model, with Transit Gateway attachments to guarantee inbound platform connectivity from the central networking hub
+- **Encryption Policies**: Enforces encryption-at-rest and in-transit requirements specific to regional regulations
+
+This modular approach allows each region to maintain its unique compliance posture while following standardized patterns for operational consistency.
+- **Application Bootstrapping**: Sets up application infrastructure foundations
+- **IAM Management**: Creates IAM users and roles per application, per region
+- **Workload Isolation**: Complete separation between environments and regions
 
 ## Makefile Usage
 
