@@ -1,0 +1,136 @@
+name: Terraform Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to deploy'
+        required: true
+        type: choice
+        options:
+          - bootstrap
+          - org
+          - identity
+          - security
+          - logging
+          - networking
+          - backup
+          - sharedservices
+          - workloads
+        default: 'bootstrap'
+      region:
+        description: 'AWS Region (required for workloads domain)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - ap-southeast-2
+          - eu-west-1
+          - eu-west-2
+        default: ''
+
+env:
+  ORG: myorg
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+
+jobs:
+  plan:
+    name: Terraform Plan - ${{ inputs.domain }}
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.6.0
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: terraform-github-actions
+          role-duration-seconds: 3600
+
+      - name: Validate Inputs
+        run: |
+          echo "Domain: ${{ inputs.domain }}"
+          echo "Region: ${{ inputs.region }}"
+          
+          if [[ "${{ inputs.domain }}" == "workloads" ]]; then
+            if [[ -z "${{ inputs.region }}" ]]; then
+              echo "❌ ERROR: Region is required for workloads domain"
+              exit 1
+            fi
+          fi
+
+      - name: Terraform Init
+        run: |
+          if [[ "${{ inputs.domain }}" == "workloads" && -n "${{ inputs.region }}" ]]; then
+            make init DOMAIN=${{ inputs.domain }} REGION=${{ inputs.region }}
+          else
+            make init DOMAIN=${{ inputs.domain }}
+          fi
+
+      - name: Terraform Plan
+        run: |
+          if [[ "${{ inputs.domain }}" == "workloads" && -n "${{ inputs.region }}" ]]; then
+            make plan DOMAIN=${{ inputs.domain }} REGION=${{ inputs.region }}
+          else
+            make plan DOMAIN=${{ inputs.domain }}
+          fi
+
+  deploy:
+    name: Terraform Apply - ${{ inputs.domain }}
+    runs-on: ubuntu-latest
+    needs: plan
+    environment: production
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.6.0
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: terraform-github-actions
+          role-duration-seconds: 3600
+
+      - name: Terraform Init
+        run: |
+          if [[ "${{ inputs.domain }}" == "workloads" && -n "${{ inputs.region }}" ]]; then
+            make init DOMAIN=${{ inputs.domain }} REGION=${{ inputs.region }}
+          else
+            make init DOMAIN=${{ inputs.domain }}
+          fi
+
+      - name: Terraform Apply
+        run: |
+          if [[ "${{ inputs.domain }}" == "workloads" && -n "${{ inputs.region }}" ]]; then
+            make apply DOMAIN=${{ inputs.domain }} REGION=${{ inputs.region }}
+          else
+            make apply DOMAIN=${{ inputs.domain }}
+          fi;

@@ -1,0 +1,186 @@
+name: Terraform Validate
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to validate'
+        required: true
+        type: choice
+        options:
+          - bootstrap
+          - org
+          - identity
+          - security
+          - logging
+          - networking
+          - backup
+          - sharedservices
+          - workloads
+        default: 'bootstrap'
+  pull_request:
+    paths:
+      - 'domain/**/*.tf'
+      - 'domain/**/*.tfvars'
+      - 'Makefile'
+      - '.github/workflows/**'
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+
+jobs:
+  validate:
+    name: Terraform Validate & Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.6.0
+
+      - name: Terraform Format Check
+        run: |
+          echo "🔍 Checking Terraform formatting..."
+          if ! terraform fmt -check -recursive -diff; then
+            echo "❌ Terraform files are not properly formatted"
+            echo "💡 Run 'make fmt' to fix formatting issues"
+            exit 1
+          else
+            echo "✅ All Terraform files are properly formatted"
+          fi
+
+      - name: Get Changed Files
+        if: github.event_name == 'pull_request'
+        id: changed-files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            
+            const changedFiles = files.map(file => file.filename);
+            const terraformFiles = changedFiles.filter(file => 
+              file.startsWith('domain/') && (file.endsWith('.tf') || file.endsWith('.tfvars'))
+            );
+            
+            console.log('Changed Terraform files:', terraformFiles);
+            
+            // Extract unique domains
+            const domains = [...new Set(
+              terraformFiles
+                .map(file => file.split('/')[1])
+                .filter(domain => domain)
+            )];
+            
+            console.log('Changed domains:', domains);
+            
+            core.setOutput('domains', domains.join(' '));
+            core.setOutput('has_changes', terraformFiles.length > 0 ? 'true' : 'false');
+
+      - name: Validate Changed Domains (PR)
+        if: github.event_name == 'pull_request' && steps.changed-files.outputs.has_changes == 'true'
+        run: |
+          echo "🔍 Validating Terraform configurations for changed domains..."
+          
+          CHANGED_DOMAINS="${{ steps.changed-files.outputs.domains }}"
+          echo "Changed domains: $CHANGED_DOMAINS"
+          
+          if [ -z "$CHANGED_DOMAINS" ]; then
+            echo "No domain changes detected"
+            exit 0
+          fi
+          
+          for domain in $CHANGED_DOMAINS; do
+            echo "Validating domain: $domain"
+            
+            # Check if domain directory has .tf files
+            if [ ! -d "domain/$domain" ]; then
+              echo "⚠️ Domain directory domain/$domain not found, skipping"
+              continue
+            fi
+            
+            if [ -z "$(find domain/$domain -name "*.tf" 2>/dev/null)" ]; then
+              echo "⚠️ No .tf files found in domain/$domain, skipping validation"
+              continue
+            fi
+            
+            # Initialize without backend for validation
+            terraform -chdir=domain/$domain init -backend=false
+            
+            # Validate syntax
+            if terraform -chdir=domain/$domain validate; then
+              echo "✅ Domain $domain validation passed"
+            else
+              echo "❌ Domain $domain validation failed"
+              exit 1
+            fi
+          done
+
+      - name: Validate All Domains (Push to Main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "🔍 Validating all Terraform configurations (push to main)..."
+          
+          # Find all domains with .tf files
+          DOMAINS=$(find domain -name "*.tf" -exec dirname {} \; | sort -u | sed 's|domain/||' | grep -v '/')
+          
+          for domain in $DOMAINS; do
+            echo "Validating domain: $domain"
+            
+            # Initialize without backend for validation
+            terraform -chdir=domain/$domain init -backend=false
+            
+            # Validate syntax
+            if terraform -chdir=domain/$domain validate; then
+              echo "✅ Domain $domain validation passed"
+            else
+              echo "❌ Domain $domain validation failed"
+              exit 1
+            fi
+          done
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.6.0
+
+      - name: Run tfsec Security Scanner
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: 'domain'
+          soft_fail: true
+
+      - name: Run Checkov Security Scanner
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: domain
+          framework: terraform
+          soft_fail: true
+          output_format: sarif
+          output_file_path: reports/results.sarif
+
+      - name: Upload Checkov Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-results
+          path: reports/results.sarif
+          retention-days: 30
+          if-no-files-found: ignore
