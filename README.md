@@ -309,4 +309,4 @@ This structure aligns with AWS Security Reference Architecture (SRA) best practi
 - **Organizational Units** for logical separation
 - **Regional distribution** for resilience and compliance
 - **Centralized logging and security** monitoring
-- **Identity-first approach** with AWS Identity Center
+- **Identity-first approach** with AWS Identity Center# terraform-aws-landing-zone-structure
